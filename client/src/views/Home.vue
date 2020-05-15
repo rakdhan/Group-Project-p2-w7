@@ -71,6 +71,227 @@
   </div>
 </template>
 
+<script>
+import axios from 'axios'
+import io from 'socket.io-client'
+import Swal from 'sweetalert2'
+const url = 'http://localhost:3000'
+const socket = io(url)
+
+export default {
+  name: 'Home',
+  data(){
+    return{
+      answer : null,
+      name: null,
+      score : 0,
+      message : '',
+      inputName: null,
+      enterRoom: false,
+      roomName: null,
+      rooms: [],
+      currentRoomName : null,
+      master : false,
+      indexRoom : 0,
+      ready : false,
+      readyCount : 0,
+      id : 0,
+      currentRoomId: -1,
+    }
+  },
+  methods: {
+    submitName(){
+      if(!this.inputName){
+        return false
+      }
+      else{
+        this.name = this.inputName
+        axios({
+          method: 'POST',
+          url: url + '/register',
+          data: {name : this.name}
+        })
+        .then( user => {
+          this.id = user.data.id
+        })
+      }
+      this.rooms = []
+      axios({
+        method: 'GET',
+        url: url + '/rooms',
+      })
+      .then( room => {
+        for(let i = 0; i < room.data.length; i++){
+          let tempUser = []
+          for(let j = 0; j < room.data[i].Users.length; j++){
+            tempUser.push(room.data[i].Users[j].name)
+          }
+          let obj = {id: room.data[i].id, name: room.data[i].name, master: room.data[i].masterId, players : tempUser}
+          this.rooms.push(obj)
+        }
+      })
+    },
+    createRoom(){
+      axios({
+        method: 'POST',
+        url: url + '/room',
+        data: {name : this.roomName, masterId : this.id}
+      })
+      .then( (room) => {
+        console.log(room.data.id)
+        this.$toasted.success('Success created room')
+        this.rooms.push({id: room.data.id, name : this.roomName, master: this.id, players: []})
+        socket.emit('add-rooms', {id: room.data.id, name : this.roomName, master: this.id, players: []})
+        this.roomName = null
+      })
+    },
+    enteringRoom(detail, index, id){
+      if(detail.players.length === 2){
+        this.$toasted.error('Room is full')
+        return false
+      } 
+      axios({
+        method: 'POST',
+        url : url + '/enterroom',
+        data: {UserId: this.id, RoomId: id}
+      })
+      this.currentRoomId = id
+      this.currentRoomName = detail.name
+      if(this.id == detail.master) this.master = true
+      this.rooms[index].players.push(this.name)
+      socket.emit('add-rooms-player', {id: id, name: this.name})
+      this.indexRoom = index
+      this.enterRoom = true
+    },
+    readyStatus(){
+      if(!this.ready){
+        this.ready = true
+        this.readyCount++
+        socket.emit('player-ready-count')
+      }
+    },
+    startGame(){
+      if(this.readyCount == 1){
+        const firstNumber = Math.floor(Math.random()* 98) + 1
+        const secondNumber = Math.floor(Math.random()* 98) + 1
+        const newIndex = Math.floor(Math.random()* 3) 
+        this.$store.dispatch('updateNumber', {num1 : firstNumber, num2 : secondNumber, index: newIndex})
+        this.$store.dispatch('startGame')
+        socket.emit('start-game', {num1 : firstNumber, num2 : secondNumber, index: newIndex, id: this.currentRoomId})
+      } else {
+        this.$toasted.error('All player are not ready yet')
+        return false
+      }
+    },
+    submitAnswer(){
+      this.checkAnswer(Number(this.answer))
+      this.answer = ''
+      this.$refs.answer.focus()
+    },
+    checkAnswer(ans){
+      let expectedAnswer
+      if(this.$store.state.index === 0){
+        expectedAnswer = this.$store.state.firstNumber + this.$store.state.secondNumber
+      } else if(this.$store.state.index === 1){
+        expectedAnswer = this.$store.state.firstNumber * this.$store.state.secondNumber
+      } else if(this.$store.state.index === 2){
+        expectedAnswer = this.$store.state.firstNumber - this.$store.state.secondNumber
+      }
+      if(ans === expectedAnswer){
+        this.score++
+        const firstNumber = Math.floor(Math.random()* 98) + 1
+        const secondNumber = Math.floor(Math.random()* 98) + 1
+        const newIndex = Math.floor(Math.random()* 3) 
+        this.$store.dispatch('updateNumber', {num1 : firstNumber, num2 : secondNumber, index : newIndex})
+        socket.emit('answer-correct', {num1 : firstNumber, num2 : secondNumber, index : newIndex})
+      } else {
+        this.$toasted.error('Your answer is incorrect')
+      }
+      if(this.score === this.$store.state.scoreWin){
+        socket.emit('get-winner', {message: `${this.name}  WIN`, id: this.currentRoomId})
+        this.$store.dispatch('getWinner')
+        this.message = `YOU WIN`
+        Swal.fire({
+          title: 'YOU WIN!',
+          width: 600,
+          padding: '3em',
+          background: '#fff url(/images/trees.png)',
+          backdrop: `
+            rgba(0,0,123,0.4)
+            url("https://images-wixmp-ed30a86b8c4ca887773594c2.wixmp.com/i/4bb2c927-94be-4686-97f1-85e57067dc6f/dc6quci-78b421db-9957-4efe-949c-73b7d6ffaf94.gif")
+            left top
+            repeat
+          `
+        })
+      }
+    },
+    playAgain(){
+      this.score = 0 
+      this.readyCount = 0
+      this.ready = false
+      this.$store.dispatch('playAgain')
+      socket.emit('play-again')
+    }
+  },
+  created(){
+    socket.on('all-rooms', data => {
+      this.rooms = data
+    })
+    socket.on('add-room-others', () => {
+      this.rooms = []
+      axios({
+        method: 'GET',
+        url: url + '/rooms',
+      })
+      .then( room => {
+        for(let i = 0; i < room.data.length; i++){
+          let tempUser = []
+          for(let j = 0; j < room.data[i].Users.length; j++){
+            tempUser.push(room.data[i].Users[j].name)
+          }
+          let obj = {id: room.data[i].id, name: room.data[i].name, master: room.data[i].masterId, players : tempUser}
+          this.rooms.push(obj)
+        }
+      })
+    })
+    socket.on('add-rooms-player-others', data => {
+      for(let i = 0; i < this.rooms.length; i++){
+        if(this.rooms[i].id == data.id){
+          this.rooms[i].players.push(data.name)
+        }
+      }
+    })
+    socket.on('adding-ready-player', () => {
+      this.readyCount++
+    })
+    socket.on('start-game-other', (data) => {
+      const {num1, num2, index, id} = data
+      if(this.currentRoomId == id){
+        this.$store.dispatch('updateNumber', {num1, num2, index})
+        this.$store.dispatch('startGame')
+      }
+    })
+    socket.on('other-alr-answer', (data) => {
+      const {num1, num2, index} = data
+      this.$store.dispatch('updateNumber', {num1, num2, index})
+      this.answer = null
+    })
+    socket.on('get-winner-alr', (data) => {
+      if(this.currentRoomId == data.id){
+        this.$store.dispatch('getWinner')
+        this.message = data.message
+      }
+    })
+    socket.on('play-again-other', () => {
+      this.score = 0
+      this.readyCount = 0
+      this.ready = false
+      this.$store.dispatch('playAgain')
+    })
+  }
+}
+</script>
+
 <style scoped>
 .home {
   width: 30%;
