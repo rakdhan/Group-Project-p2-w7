@@ -75,7 +75,7 @@
 import axios from 'axios'
 import io from 'socket.io-client'
 import Swal from 'sweetalert2'
-const url = 'http://localhost:3000'
+const url = `https://mathest1.herokuapp.com `
 const socket = io(url)
 
 export default {
